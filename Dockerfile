@@ -32,4 +32,4 @@ COPY . .
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Lệnh mặc định để chạy khi container khởi động
-CMD ["python3", "forward_bot.py"]
+CMD ["python3", "bot.py"]
