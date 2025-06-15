@@ -76,13 +76,7 @@ async def set_forward(client, message):
         return await message.reply("❗ Dùng: /set [source_chat_id] [target_chat_id] [id_last_chat]")
 
     forwards.update_one(
-        {"user_id": message.from_user.id, "target": target},
-        {"$addToSet": {"sources": source}, "$set": {"last_message_id": last_id}},
-        upsert=True
-    )
-
-    forwards.update_one(
-        {"user_id": message.from_user.id, "target": target, "sources": source},
+        {"user_id": message.from_user.id, "target": target, "source": source},
         {"$set": {"last_message_id": last_id}},
         upsert=True
     )
@@ -97,9 +91,7 @@ async def list_forward(client, message):
     data = forwards.find({"user_id": message.from_user.id})
     text = "📋 **Danh sách forward:**\n"
     for item in data:
-        text += f"\n**Target** `{item['target']}` (Last ID: `{item.get('last_message_id', 0)}`):\n"
-        for src in item.get("sources", []):
-            text += f"- `{src}`\n"
+        text += f"\n**Target** `{item['target']}` (Source: `{item['source']}` | Last ID: `{item.get('last_message_id', 0)}`)"
     await message.reply(text or "📋 Danh sách trống.")
 
 @bot.on_message(filters.command("unset"))
@@ -114,17 +106,12 @@ async def unset_forward(client, message):
         return await message.reply("❗ Dùng: /unset s|t [chat_id]")
 
     if mode == "s":
-        result = forwards.update_many(
-            {"user_id": message.from_user.id},
-            {"$pull": {"sources": chat_id}}
-        )
-        return await message.reply(f"✅ Đã xóa source `{chat_id}` khỏi {result.modified_count} target.")
+        result = forwards.delete_many({"user_id": message.from_user.id, "source": chat_id})
+        return await message.reply(f"✅ Đã xóa `{chat_id}` khỏi {result.deleted_count} forward.")
 
-    elif mode in ["t"]:
+    elif mode == "t":
         result = forwards.delete_many({"user_id": message.from_user.id, "target": chat_id})
-        if result.deleted_count == 0:
-            return await message.reply("❗ Target không tồn tại.")
-        return await message.reply("✅ Đã xóa target và toàn bộ source.")
+        return await message.reply(f"✅ Đã xóa `{chat_id}` khỏi {result.deleted_count} forward.")
 
     else:
         return await message.reply("❗ Dùng: /unset s|t [chat_id]")
@@ -161,43 +148,47 @@ async def start_scan(client, message):
 
             for row in user_data:
                 await ensure_peer(user_client, row['target'])
+                await ensure_peer(user_client, row['source'])
 
-                for source in row.get("sources", []):
-                    await ensure_peer(user_client, source)
+                last_forwarded_id = row.get("last_message_id", 0)
+                await message.reply(f"▶️ Bắt đầu scan `{row['source']}` ➔ `{row['target']}` từ ID `{last_forwarded_id}`")
 
-                    last_forwarded_id = row.get("last_message_id", 0)
-                    await message.reply(f"▶️ Bắt đầu scan `{source}` ➔ `{row['target']}` từ ID `{last_forwarded_id}`")
+                first_forwarded_id = None
+                count = 0
 
-                    first_forwarded_id = None
+                async for msg in user_client.get_chat_history(row['source']):
+                    if not scanning.get(message.from_user.id):
+                        return await message.reply("🛑 Đã dừng scan.")
 
-                    async for msg in user_client.get_chat_history(source):
-                        if not scanning.get(message.from_user.id):
-                            return await message.reply("🛑 Đã dừng scan.")
+                    if msg.id <= last_forwarded_id:
+                        break
 
-                        if msg.id <= last_forwarded_id:
-                            break
+                    if msg.video:
+                        try:
+                            await user_client.copy_message(
+                                chat_id=row['target'],
+                                from_chat_id=row['source'],
+                                message_id=msg.id,
+                                caption="",
+                                caption_entities=[]
+                            )
+                            if first_forwarded_id is None or msg.id > first_forwarded_id:
+                                first_forwarded_id = msg.id
+                            count += 1
 
-                        if msg.video:
-                            try:
-                                await user_client.copy_message(
-                                    chat_id=row['target'],
-                                    from_chat_id=source,
-                                    message_id=msg.id,
-                                    caption="",
-                                    caption_entities=[]
-                                )
-                                if first_forwarded_id is None or msg.id > first_forwarded_id:
-                                    first_forwarded_id = msg.id
-                            except Exception as e:
-                                await message.reply(f"❌ Lỗi `{msg.id}` từ `{source}` ➔ `{row['target']}`: {e}")
+                            if count % 100 == 0:
+                                await asyncio.sleep(5)
 
-                    if first_forwarded_id is not None:
-                        forwards.update_one(
-                            {"_id": row["_id"]},
-                            {"$set": {"last_message_id": first_forwarded_id}}
-                        )
+                        except Exception as e:
+                            await message.reply(f"❌ Lỗi `{msg.id}` từ `{row['source']}` ➔ `{row['target']}`: {e}")
 
-                    await message.reply(f"✅ Đã hoàn tất scan `{source}` ➔ `{row['target']}` đến ID `{first_forwarded_id or last_forwarded_id}`")
+                if first_forwarded_id is not None:
+                    forwards.update_one(
+                        {"_id": row["_id"]},
+                        {"$set": {"last_message_id": first_forwarded_id}}
+                    )
+
+                await message.reply(f"✅ Đã hoàn tất scan `{row['source']}` ➔ `{row['target']}` đến ID `{first_forwarded_id or last_forwarded_id}`")
 
             await message.reply("✅ Đã hoàn tất tất cả các scan.")
 
