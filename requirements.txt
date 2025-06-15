@@ -1,4 +1,4 @@
 pyrofork
 tgcrypto
 pymongo
-dnspython
+flask
