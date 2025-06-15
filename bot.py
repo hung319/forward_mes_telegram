@@ -90,10 +90,21 @@ async def list_forward(client, message):
 
     data = forwards.find({"user_id": message.from_user.id})
     text = "📋 **Danh sách forward:**\n"
-    for item in data:
-        text += f"\n**Target** `{item['target']}` (Source: `{item['source']}` | Last ID: `{item.get('last_message_id', 0)}`)"
+    count = 0
 
-    await message.reply(text or "📋 Danh sách trống.")
+    for item in data:
+        source = item.get("source")
+        target = item.get("target")
+        last_id = item.get("last_message_id", 0)
+
+        if source is not None and target is not None:
+            text += f"\n**Target** `{target}` (Source: `{source}` | Last ID: `{last_id}`)"
+            count += 1
+
+    if count == 0:
+        text += "\n📋 Danh sách trống hoặc thiếu dữ liệu."
+
+    await message.reply(text)
 
 @bot.on_message(filters.command("unset"))
 async def unset_forward(client, message):
