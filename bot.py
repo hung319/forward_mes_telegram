@@ -36,7 +36,7 @@ async def help_command(client, message):
         "📜 **Hướng dẫn sử dụng bot**\n\n"
         "**/login [session_string]** - Lưu session Telegram để forward tin nhắn.\n"
         "**/set [source_chat_id] [target_chat_id] [id_last_chat]** - Thêm cấu hình forward từ nhóm nguồn ➔ nhóm đích.\n"
-        "**/unset s|t [chat_id]** - Xóa cấu hình forward (s=source, t=target).\n"
+        "**/unset [source_chat_id] [target_chat_id]** - Xóa cấu hình forward.\n"
         "**/list** - Hiển thị danh sách forward hiện tại.\n"
         "**/scan** - Bắt đầu quét và forward video từ các nhóm đã cấu hình.\n"
         "**/stop** - Dừng quá trình scan hiện tại.\n"
@@ -69,26 +69,17 @@ async def set_forward(client, message):
         return await message.reply("❌ Bạn không có quyền.")
 
     try:
-        source = int(message.command[1])
+        source = str(int(message.command[1]))
         target = int(message.command[2])
         last_id = int(message.command[3]) if len(message.command) > 3 else 0
     except (IndexError, ValueError):
         return await message.reply("❗ Dùng: /set [source_chat_id] [target_chat_id] [id_last_chat]")
 
-    # Kiểm tra nếu đã có forward giống nhau, cập nhật last_message_id nếu cần
-    existing = forwards.find_one({"user_id": message.from_user.id, "source": source, "target": target})
-    if existing:
-        forwards.update_one(
-            {"_id": existing["_id"]},
-            {"$set": {"last_message_id": max(existing.get("last_message_id", 0), last_id)}}
-        )
-    else:
-        forwards.insert_one({
-            "user_id": message.from_user.id,
-            "source": source,
-            "target": target,
-            "last_message_id": last_id
-        })
+    forwards.update_one(
+        {"user_id": message.from_user.id, "target": target},
+        {"$set": {f"sources.{source}": last_id}},
+        upsert=True
+    )
 
     await message.reply(f"✅ Đã thêm/gộp cấu hình từ `{source}` ➔ `{target}` với ID `{last_id}`")
 
@@ -100,14 +91,16 @@ async def list_forward(client, message):
     data = forwards.find({"user_id": message.from_user.id})
     text = "📋 **Danh sách forward:**\n"
 
-    if forwards.count_documents({"user_id": message.from_user.id}) == 0:
+    found = False
+    for item in data:
+        target = item.get("target")
+        sources = item.get("sources", {})
+        for src, last_id in sources.items():
+            text += f"\n**Target** `{target}` (Source: `{src}` | Last ID: `{last_id}`)"
+            found = True
+
+    if not found:
         text += "\n📋 Danh sách trống."
-    else:
-        for item in data:
-            source = item.get("source")
-            target = item.get("target")
-            last_id = item.get("last_message_id", 0)
-            text += f"\n**Target** `{target}` (Source: `{source}` | Last ID: `{last_id}`)"
 
     await message.reply(text)
 
@@ -117,21 +110,17 @@ async def unset_forward(client, message):
         return await message.reply("❌ Bạn không có quyền.")
 
     try:
-        mode = message.command[1]
-        chat_id = int(message.command[2])
+        source = str(int(message.command[1]))
+        target = int(message.command[2])
     except (IndexError, ValueError):
-        return await message.reply("❗ Dùng: /unset s|t [chat_id]")
+        return await message.reply("❗ Dùng: /unset [source_chat_id] [target_chat_id]")
 
-    if mode == "s":
-        result = forwards.delete_many({"user_id": message.from_user.id, "source": chat_id})
-        return await message.reply(f"✅ Đã xóa `{chat_id}` khỏi {result.deleted_count} forward.")
+    forwards.update_one(
+        {"user_id": message.from_user.id, "target": target},
+        {"$unset": {f"sources.{source}": ""}}
+    )
 
-    elif mode == "t":
-        result = forwards.delete_many({"user_id": message.from_user.id, "target": chat_id})
-        return await message.reply(f"✅ Đã xóa `{chat_id}` khỏi {result.deleted_count} forward.")
-
-    else:
-        return await message.reply("❗ Dùng: /unset s|t [chat_id]")
+    await message.reply(f"✅ Đã xóa source `{source}` khỏi target `{target}`.")
 
 @bot.on_message(filters.command("scan"))
 async def start_scan(client, message):
@@ -163,48 +152,52 @@ async def start_scan(client, message):
         try:
             forwards_data = forwards.find({"user_id": message.from_user.id})
             for row in forwards_data:
-                await ensure_peer(user_client, row['target'])
-                await ensure_peer(user_client, row['source'])
+                target = row['target']
+                sources = row.get("sources", {})
 
-                last_forwarded_id = row.get("last_message_id", 0)
-                await message.reply(f"▶️ Bắt đầu scan `{row['source']}` ➔ `{row['target']}` từ ID `{last_forwarded_id}`")
+                await ensure_peer(user_client, target)
 
-                first_forwarded_id = None
-                count = 0
+                for source, last_forwarded_id in sources.items():
+                    source = int(source)
+                    await ensure_peer(user_client, source)
+                    await message.reply(f"▶️ Bắt đầu scan `{source}` ➔ `{target}` từ ID `{last_forwarded_id}`")
 
-                async for msg in user_client.get_chat_history(row['source']):
-                    if not scanning.get(message.from_user.id):
-                        return await message.reply("🛑 Đã dừng scan.")
+                    first_forwarded_id = None
+                    count = 0
 
-                    if msg.id <= last_forwarded_id:
-                        break
+                    async for msg in user_client.get_chat_history(source):
+                        if not scanning.get(message.from_user.id):
+                            return await message.reply("🛑 Đã dừng scan.")
 
-                    if msg.video:
-                        try:
-                            await user_client.copy_message(
-                                chat_id=row['target'],
-                                from_chat_id=row['source'],
-                                message_id=msg.id,
-                                caption="",
-                                caption_entities=[]
-                            )
-                            if first_forwarded_id is None or msg.id > first_forwarded_id:
-                                first_forwarded_id = msg.id
-                            count += 1
+                        if msg.id <= last_forwarded_id:
+                            break
 
-                            if count % 100 == 0:
-                                await asyncio.sleep(5)
+                        if msg.video:
+                            try:
+                                await user_client.copy_message(
+                                    chat_id=target,
+                                    from_chat_id=source,
+                                    message_id=msg.id,
+                                    caption="",
+                                    caption_entities=[]
+                                )
+                                if first_forwarded_id is None or msg.id > first_forwarded_id:
+                                    first_forwarded_id = msg.id
+                                count += 1
 
-                        except Exception as e:
-                            await message.reply(f"❌ Lỗi `{msg.id}` từ `{row['source']}` ➔ `{row['target']}`: {e}")
+                                if count % 100 == 0:
+                                    await asyncio.sleep(5)
 
-                if first_forwarded_id is not None:
-                    forwards.update_one(
-                        {"_id": row["_id"]},
-                        {"$set": {"last_message_id": first_forwarded_id}}
-                    )
+                            except Exception as e:
+                                await message.reply(f"❌ Lỗi `{msg.id}` từ `{source}` ➔ `{target}`: {e}")
 
-                await message.reply(f"✅ Đã hoàn tất scan `{row['source']}` ➔ `{row['target']}` đến ID `{first_forwarded_id or last_forwarded_id}`")
+                    if first_forwarded_id is not None:
+                        forwards.update_one(
+                            {"_id": row["_id"]},
+                            {"$set": {f"sources.{source}": first_forwarded_id}}
+                        )
+
+                    await message.reply(f"✅ Đã hoàn tất scan `{source}` ➔ `{target}` đến ID `{first_forwarded_id or last_forwarded_id}`")
 
             await message.reply("✅ Đã hoàn tất tất cả các scan.")
 
