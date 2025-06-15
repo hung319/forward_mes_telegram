@@ -92,6 +92,7 @@ async def list_forward(client, message):
     text = "📋 **Danh sách forward:**\n"
     for item in data:
         text += f"\n**Target** `{item['target']}` (Source: `{item['source']}` | Last ID: `{item.get('last_message_id', 0)}`)"
+
     await message.reply(text or "📋 Danh sách trống.")
 
 @bot.on_message(filters.command("unset"))
