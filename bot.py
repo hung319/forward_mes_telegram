@@ -16,15 +16,12 @@ bot = Client("forward_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_
 ADMIN_IDS = config.ADMIN_IDS
 scanning = {}
 
-
 def is_admin(user_id):
     return user_id in ADMIN_IDS
-
 
 def get_adminonly():
     setting = settings.find_one({"_id": "adminonly"})
     return setting and setting.get("enabled", False)
-
 
 async def ensure_peer(client, chat_id):
     try:
@@ -32,7 +29,6 @@ async def ensure_peer(client, chat_id):
     except Exception as e:
         print(f"[DEBUG] ensure_peer error with chat_id {chat_id}: {e}")
         return None
-
 
 @bot.on_message(filters.command("help"))
 async def help_command(client, message):
@@ -48,7 +44,6 @@ async def help_command(client, message):
         "**/help** - Hiển thị hướng dẫn này."
     )
     await message.reply(help_text)
-
 
 @bot.on_message(filters.command("login"))
 async def login_session(client, message):
@@ -68,7 +63,6 @@ async def login_session(client, message):
 
     await message.reply("✅ Đã lưu session thành công.")
 
-
 @bot.on_message(filters.command("set"))
 async def set_forward(client, message):
     if get_adminonly() and not is_admin(message.from_user.id):
@@ -81,14 +75,22 @@ async def set_forward(client, message):
     except (IndexError, ValueError):
         return await message.reply("❗ Dùng: /set [source_chat_id] [target_chat_id] [id_last_chat]")
 
-    forwards.update_one(
-        {"user_id": message.from_user.id, "source": source, "target": target},
-        {"$set": {"last_message_id": last_id}},
-        upsert=True
-    )
+    # Kiểm tra nếu đã có forward giống nhau, cập nhật last_message_id nếu cần
+    existing = forwards.find_one({"user_id": message.from_user.id, "source": source, "target": target})
+    if existing:
+        forwards.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {"last_message_id": max(existing.get("last_message_id", 0), last_id)}}
+        )
+    else:
+        forwards.insert_one({
+            "user_id": message.from_user.id,
+            "source": source,
+            "target": target,
+            "last_message_id": last_id
+        })
 
-    await message.reply(f"✅ Đã thêm cấu hình từ `{source}` ➔ `{target}` với ID `{last_id}`")
-
+    await message.reply(f"✅ Đã thêm/gộp cấu hình từ `{source}` ➔ `{target}` với ID `{last_id}`")
 
 @bot.on_message(filters.command("list"))
 async def list_forward(client, message):
@@ -108,7 +110,6 @@ async def list_forward(client, message):
             text += f"\n**Target** `{target}` (Source: `{source}` | Last ID: `{last_id}`)"
 
     await message.reply(text)
-
 
 @bot.on_message(filters.command("unset"))
 async def unset_forward(client, message):
@@ -131,7 +132,6 @@ async def unset_forward(client, message):
 
     else:
         return await message.reply("❗ Dùng: /unset s|t [chat_id]")
-
 
 @bot.on_message(filters.command("scan"))
 async def start_scan(client, message):
@@ -211,7 +211,6 @@ async def start_scan(client, message):
         finally:
             scanning[message.from_user.id] = False
 
-
 @bot.on_message(filters.command("stop"))
 async def stop_scan(client, message):
     if get_adminonly() and not is_admin(message.from_user.id):
@@ -219,7 +218,6 @@ async def stop_scan(client, message):
 
     scanning[message.from_user.id] = False
     await message.reply("🛑 Đã yêu cầu dừng scan.")
-
 
 @bot.on_message(filters.command("adminonly"))
 async def toggle_adminonly(client, message):
@@ -235,11 +233,9 @@ async def toggle_adminonly(client, message):
     status = "✅ Đã bật chế độ chỉ admin." if not current else "❎ Đã tắt chế độ chỉ admin."
     await message.reply(status)
 
-
 @bot.on_message(filters.command("start"))
 async def start_command(client, message):
     await message.reply("🤖 Bot đã chạy thành công! Gõ /help để xem hướng dẫn.")
-
 
 print("🤖 Bot đã khởi động thành công!")
 bot.run()
