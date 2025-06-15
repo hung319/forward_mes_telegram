@@ -1,20 +1,35 @@
-# Bước 1: Chọn một môi trường gốc (base image) ổn định
-# Chúng ta dùng Python 3.11 phiên bản "slim" để nhẹ và hiệu quả
-FROM python:3.11-slim
+# GIAI ĐOẠN 1: "BUILDER" - Môi trường để biên dịch các thư viện
+# Giai đoạn này sẽ cài đặt các công cụ cần thiết để build tgcrypto
+FROM python:3.11-slim AS builder
 
-# Bước 2: Đặt thư mục làm việc bên trong container
-WORKDIR /app
+# Cài đặt các gói hệ thống cần thiết cho việc biên dịch (gcc, python headers, etc.)
+RUN apt-get update && apt-get install -y build-essential
 
-# Bước 3: Sao chép file requirements.txt vào trước
-# Tận dụng cơ chế cache của Docker: nếu file này không đổi, Docker sẽ không cần cài lại thư viện
+# Tạo một virtual environment để quản lý các gói đã cài đặt
+RUN python -m venv /opt/venv
+
+# Kích hoạt virtual environment và cài đặt các thư viện Python
+# Điều này đảm bảo các gói được biên dịch đúng cách
+ENV PATH="/opt/venv/bin:$PATH"
 COPY requirements.txt .
-
-# Bước 4: Cài đặt các thư viện Python đã liệt kê
-# --no-cache-dir giúp giảm kích thước của image cuối cùng
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Bước 5: Sao chép toàn bộ code của bạn vào container
+
+# GIAI ĐOẠN 2: "FINAL" - Môi trường chạy ứng dụng cuối cùng
+# Giai đoạn này tạo ra image cuối cùng, sạch sẽ và nhẹ, không chứa build-essential
+FROM python:3.11-slim
+
+# Đặt thư mục làm việc
+WORKDIR /app
+
+# Sao chép các thư viện đã được cài đặt ở virtual environment từ giai đoạn "builder" sang
+COPY --from=builder /opt/venv /opt/venv
+
+# Sao chép code của ứng dụng vào
 COPY . .
 
-# Bước 6: Lệnh mặc định để chạy khi container khởi động
-CMD ["python3", "bot.py"]
+# Kích hoạt virtual environment cho các lệnh tiếp theo
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Lệnh mặc định để chạy khi container khởi động
+CMD ["python3", "forward_bot.py"]
