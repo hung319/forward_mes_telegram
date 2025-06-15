@@ -1,21 +1,11 @@
-# config.py
 import os
 
-# --- Telegram API Credentials ---
-API_ID = int(os.environ.get("API_ID", "YOUR_API_ID_HERE"))
-API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH_HERE")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+API_ID = int(os.getenv("API_ID", 123456))  # Có thể để mặc định 123456 hoặc bỏ luôn default nếu muốn
+API_HASH = os.getenv("API_HASH", "your_api_hash")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
 
-# --- MongoDB Configuration ---
-MONGO_CONNECTION_STRING = os.environ.get("MONGO_URI", "mongodb://localhost:27017/")
-DB_NAME = "telegram_forward_bot"
-COLLECTION_NAME = "forward_rules"
-# Thêm collection mới để lưu trữ user sessions
-USER_SESSIONS_COLLECTION_NAME = "user_sessions"
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+DATABASE_NAME = os.getenv("DATABASE_NAME", "forward_bot")
 
-# --- Logging Configuration (Tùy chọn) ---
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
-
-# --- Admin User IDs (Quan trọng để kiểm soát ai có thể dùng lệnh) ---
-# Thêm ID Telegram của bạn vào đây để chỉ bạn mới có thể dùng các lệnh admin
-ADMIN_USER_IDS = [int(os.environ.get("ADMIN_ID", "YOUR_ADMIN_ID_HERE"))] # Thay bằng ID Telegram của bạn
+# ADMIN_IDS lưu dưới dạng chuỗi, ví dụ "123456,78910", sau đó chuyển thành list[int]
+ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "123456789").split(",")))
