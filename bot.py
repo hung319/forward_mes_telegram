@@ -189,7 +189,7 @@ async def start_scan(client, message):
                                 count += 1
 
                                 if count % 100 == 0:
-                                    await asyncio.sleep(5)
+                                    await asyncio.sleep(10)
 
                             except Exception as e:
                                 await message.reply(f"❌ Lỗi `{msg.id}` từ `{source}` ➔ `{row['target']}`: {e}")
