@@ -18,4 +18,4 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
 # --- Admin User IDs (Quan trọng để kiểm soát ai có thể dùng lệnh) ---
 # Thêm ID Telegram của bạn vào đây để chỉ bạn mới có thể dùng các lệnh admin
-ADMIN_USER_IDS = [123456789] # Thay bằng ID Telegram của bạn
+ADMIN_USER_IDS = [int(os.environ.get("ADMIN_ID", "YOUR_ADMIN_ID_HERE"))] # Thay bằng ID Telegram của bạn
