@@ -35,7 +35,7 @@ async def help_command(client, message):
     help_text = (
         "📜 **Hướng dẫn sử dụng bot**\n\n"
         "**/login [session_string]** - Lưu session Telegram để forward tin nhắn.\n"
-        "**/set [source_chat_id] [target_chat_id]** - Thêm cấu hình forward từ nhóm nguồn ➔ nhóm đích.\n"
+        "**/set [source_chat_id] [target_chat_id] [id_last_chat]** - Thêm cấu hình forward từ nhóm nguồn ➔ nhóm đích.\n"
         "**/unset s|t [chat_id]** - Xóa cấu hình forward (s=source, t=target).\n"
         "**/list** - Hiển thị danh sách forward hiện tại.\n"
         "**/scan** - Bắt đầu quét và forward video từ các nhóm đã cấu hình.\n"
@@ -71,15 +71,23 @@ async def set_forward(client, message):
     try:
         source = int(message.command[1])
         target = int(message.command[2])
+        last_id = int(message.command[3]) if len(message.command) > 3 else 0
     except (IndexError, ValueError):
-        return await message.reply("❗ Dùng: /set [source_chat_id] [target_chat_id]")
+        return await message.reply("❗ Dùng: /set [source_chat_id] [target_chat_id] [id_last_chat]")
 
     forwards.update_one(
         {"user_id": message.from_user.id, "target": target},
-        {"$addToSet": {"sources": source}},
+        {"$addToSet": {"sources": source}, "$set": {"last_message_id": last_id}},
         upsert=True
     )
-    await message.reply(f"✅ Đã thêm cấu hình từ `{source}` ➔ `{target}`")
+
+    forwards.update_one(
+        {"user_id": message.from_user.id, "target": target, "sources": source},
+        {"$set": {"last_message_id": last_id}},
+        upsert=True
+    )
+
+    await message.reply(f"✅ Đã thêm cấu hình từ `{source}` ➔ `{target}` với ID `{last_id}`")
 
 @bot.on_message(filters.command("list"))
 async def list_forward(client, message):
@@ -89,7 +97,7 @@ async def list_forward(client, message):
     data = forwards.find({"user_id": message.from_user.id})
     text = "📋 **Danh sách forward:**\n"
     for item in data:
-        text += f"\n**Target** `{item['target']}`:\n"
+        text += f"\n**Target** `{item['target']}` (Last ID: `{item.get('last_message_id', 0)}`):\n"
         for src in item.get("sources", []):
             text += f"- `{src}`\n"
     await message.reply(text or "📋 Danh sách trống.")
@@ -112,7 +120,7 @@ async def unset_forward(client, message):
         )
         return await message.reply(f"✅ Đã xóa source `{chat_id}` khỏi {result.modified_count} target.")
 
-    elif mode in ["t", "target"]:
+    elif mode in ["t"]:
         result = forwards.delete_many({"user_id": message.from_user.id, "target": chat_id})
         if result.deleted_count == 0:
             return await message.reply("❗ Target không tồn tại.")
@@ -174,7 +182,9 @@ async def start_scan(client, message):
                                 await user_client.copy_message(
                                     chat_id=row['target'],
                                     from_chat_id=source,
-                                    message_id=msg.id
+                                    message_id=msg.id,
+                                    caption="",
+                                    caption_entities=[]
                                 )
                                 if first_forwarded_id is None or msg.id > first_forwarded_id:
                                     first_forwarded_id = msg.id
@@ -220,4 +230,5 @@ async def toggle_adminonly(client, message):
 async def start_command(client, message):
     await message.reply("🤖 Bot đã chạy thành công! Gõ /help để xem hướng dẫn.")
 
+print("🤖 Bot đã khởi động thành công!")
 bot.run()
