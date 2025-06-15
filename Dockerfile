@@ -17,4 +17,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Bước 6: Lệnh mặc định để chạy khi container khởi động
-CMD ["python3", "forward_bot.py"]
+CMD ["python3", "bot.py"]
