@@ -1,6 +1,7 @@
 import asyncio
 import os
 from pyrogram import Client, filters
+from pyrogram.errors import FloodWait
 from pyrogram.types import Message
 from pymongo import MongoClient
 import config
@@ -16,12 +17,15 @@ bot = Client("forward_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_
 ADMIN_IDS = config.ADMIN_IDS
 scanning = {}
 
+
 def is_admin(user_id):
     return user_id in ADMIN_IDS
+
 
 def get_adminonly():
     setting = settings.find_one({"_id": "adminonly"})
     return setting and setting.get("enabled", False)
+
 
 async def ensure_peer(client, chat_id):
     try:
@@ -29,6 +33,7 @@ async def ensure_peer(client, chat_id):
     except Exception as e:
         print(f"[DEBUG] ensure_peer error with chat_id {chat_id}: {e}")
         return None
+
 
 @bot.on_message(filters.command("help"))
 async def help_command(client, message):
@@ -44,6 +49,7 @@ async def help_command(client, message):
         "**/help** - Hiển thị hướng dẫn này."
     )
     await message.reply(help_text)
+
 
 @bot.on_message(filters.command("login"))
 async def login_session(client, message):
@@ -62,6 +68,7 @@ async def login_session(client, message):
     )
 
     await message.reply("✅ Đã lưu session thành công.")
+
 
 @bot.on_message(filters.command("set"))
 async def set_forward(client, message):
@@ -83,6 +90,7 @@ async def set_forward(client, message):
 
     await message.reply(f"✅ Đã thêm cấu hình từ `{source}` ➔ `{target}` với ID `{last_id}`")
 
+
 @bot.on_message(filters.command("list"))
 async def list_forward(client, message):
     if get_adminonly() and not is_admin(message.from_user.id):
@@ -98,9 +106,10 @@ async def list_forward(client, message):
             target = item.get("target")
             sources = item.get("sources", {})
             source_list = "; ".join([f"{src} | Last ID: {lid}" for src, lid in sources.items()])
-            text += f"\n\nTarget `{target}` (Source: {source_list})"
+            text += f"\n\n**Target** `{target}` ({source_list})"
 
     await message.reply(text)
+
 
 @bot.on_message(filters.command("unset"))
 async def unset_forward(client, message):
@@ -126,6 +135,7 @@ async def unset_forward(client, message):
 
     else:
         return await message.reply("❗ Dùng: /unset s|t [chat_id]")
+
 
 @bot.on_message(filters.command("scan"))
 async def start_scan(client, message):
@@ -175,8 +185,9 @@ async def start_scan(client, message):
                         if msg.id <= last_forwarded_id:
                             break
 
-                        if msg.video:
+                        if msg.video and msg.video.duration >= 60:
                             try:
+                                await asyncio.sleep(0.5)
                                 await user_client.copy_message(
                                     chat_id=row['target'],
                                     from_chat_id=int(source),
@@ -189,7 +200,11 @@ async def start_scan(client, message):
                                 count += 1
 
                                 if count % 100 == 0:
-                                    await asyncio.sleep(15)
+                                    await asyncio.sleep(5)
+
+                            except FloodWait as e:
+                                await asyncio.sleep(e.value)
+                                continue
 
                             except Exception as e:
                                 await message.reply(f"❌ Lỗi `{msg.id}` từ `{source}` ➔ `{row['target']}`: {e}")
@@ -207,6 +222,7 @@ async def start_scan(client, message):
         finally:
             scanning[message.from_user.id] = False
 
+
 @bot.on_message(filters.command("stop"))
 async def stop_scan(client, message):
     if get_adminonly() and not is_admin(message.from_user.id):
@@ -214,6 +230,7 @@ async def stop_scan(client, message):
 
     scanning[message.from_user.id] = False
     await message.reply("🛑 Đã yêu cầu dừng scan.")
+
 
 @bot.on_message(filters.command("adminonly"))
 async def toggle_adminonly(client, message):
@@ -229,9 +246,11 @@ async def toggle_adminonly(client, message):
     status = "✅ Đã bật chế độ chỉ admin." if not current else "❎ Đã tắt chế độ chỉ admin."
     await message.reply(status)
 
+
 @bot.on_message(filters.command("start"))
 async def start_command(client, message):
     await message.reply("🤖 Bot đã chạy thành công! Gõ /help để xem hướng dẫn.")
+
 
 print("🤖 Bot đã khởi động thành công!")
 bot.run()
