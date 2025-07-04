@@ -17,15 +17,12 @@ bot = Client("forward_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_
 ADMIN_IDS = config.ADMIN_IDS
 scanning = {}
 
-
 def is_admin(user_id):
     return user_id in ADMIN_IDS
-
 
 def get_adminonly():
     setting = settings.find_one({"_id": "adminonly"})
     return setting and setting.get("enabled", False)
-
 
 async def ensure_peer(client, chat_id):
     try:
@@ -33,7 +30,6 @@ async def ensure_peer(client, chat_id):
     except Exception as e:
         print(f"[DEBUG] ensure_peer error with chat_id {chat_id}: {e}")
         return None
-
 
 @bot.on_message(filters.command("help"))
 async def help_command(client, message):
@@ -49,7 +45,6 @@ async def help_command(client, message):
         "**/help** - Hiển thị hướng dẫn này."
     )
     await message.reply(help_text)
-
 
 @bot.on_message(filters.command("login"))
 async def login_session(client, message):
@@ -68,7 +63,6 @@ async def login_session(client, message):
     )
 
     await message.reply("✅ Đã lưu session thành công.")
-
 
 @bot.on_message(filters.command("set"))
 async def set_forward(client, message):
@@ -90,7 +84,6 @@ async def set_forward(client, message):
 
     await message.reply(f"✅ Đã thêm cấu hình từ `{source}` ➔ `{target}` với ID `{last_id}`")
 
-
 @bot.on_message(filters.command("list"))
 async def list_forward(client, message):
     if get_adminonly() and not is_admin(message.from_user.id):
@@ -109,7 +102,6 @@ async def list_forward(client, message):
             text += f"\n\n**Target** `{target}` ({source_list})"
 
     await message.reply(text)
-
 
 @bot.on_message(filters.command("unset"))
 async def unset_forward(client, message):
@@ -135,7 +127,6 @@ async def unset_forward(client, message):
 
     else:
         return await message.reply("❗ Dùng: /unset s|t [chat_id]")
-
 
 @bot.on_message(filters.command("scan"))
 async def start_scan(client, message):
@@ -167,61 +158,76 @@ async def start_scan(client, message):
         try:
             forwards_data = forwards.find({"user_id": message.from_user.id})
             for row in forwards_data:
-                await ensure_peer(user_client, row['target'])
-                sources = row.get("sources", {})
+                if not await ensure_peer(user_client, row['target']):
+                    await message.reply(f"⚠️ Target `{row['target']}` không truy cập được.")
+                    continue
 
-                for source, last_forwarded_id in sources.items():
-                    await ensure_peer(user_client, int(source))
+                sources = row.get("sources", {})
+                for source, last_forwarded_id in list(sources.items()):
+                    peer = await ensure_peer(user_client, int(source))
+                    if not peer:
+                        await message.reply(f"⚠️ Không thể truy cập `{source}`, đang xóa khỏi cấu hình...")
+                        forwards.update_one(
+                            {"_id": row["_id"]},
+                            {"$unset": {f"sources.{source}": ""}}
+                        )
+                        continue
 
                     await message.reply(f"▶️ Bắt đầu scan `{source}` ➔ `{row['target']}` từ ID `{last_forwarded_id}`")
-
                     first_forwarded_id = None
                     count = 0
 
-                    async for msg in user_client.get_chat_history(int(source)):
-                        if not scanning.get(message.from_user.id):
-                            return await message.reply("🛑 Đã dừng scan.")
+                    try:
+                        async for msg in user_client.get_chat_history(int(source)):
+                            if not scanning.get(message.from_user.id):
+                                return await message.reply("🛑 Đã dừng scan.")
 
-                        if msg.id <= last_forwarded_id:
-                            break
+                            if msg.id <= last_forwarded_id:
+                                break
 
-                        if msg.video and msg.video.duration >= 60:
-                            try:
-                                await asyncio.sleep(0.5)
-                                await user_client.copy_message(
-                                    chat_id=row['target'],
-                                    from_chat_id=int(source),
-                                    message_id=msg.id,
-                                    caption="",
-                                    caption_entities=[]
-                                )
-                                if first_forwarded_id is None or msg.id > first_forwarded_id:
-                                    first_forwarded_id = msg.id
-                                count += 1
+                            if msg.video and msg.video.duration >= 60:
+                                try:
+                                    await asyncio.sleep(0.5)
+                                    await user_client.copy_message(
+                                        chat_id=row['target'],
+                                        from_chat_id=int(source),
+                                        message_id=msg.id,
+                                        caption="",
+                                        caption_entities=[]
+                                    )
+                                    if first_forwarded_id is None or msg.id > first_forwarded_id:
+                                        first_forwarded_id = msg.id
+                                    count += 1
 
-                                if count % 100 == 0:
-                                    await asyncio.sleep(5)
+                                    if count % 100 == 0:
+                                        await asyncio.sleep(5)
 
-                            except FloodWait as e:
-                                await asyncio.sleep(e.value)
-                                continue
+                                except FloodWait as e:
+                                    await asyncio.sleep(e.value)
+                                    continue
 
-                            except Exception as e:
-                                await message.reply(f"❌ Lỗi `{msg.id}` từ `{source}` ➔ `{row['target']}`: {e}")
+                                except Exception as e:
+                                    await message.reply(f"❌ Lỗi `{msg.id}` từ `{source}` ➔ `{row['target']}`: {e}")
 
-                    if first_forwarded_id is not None:
+                        if first_forwarded_id is not None:
+                            forwards.update_one(
+                                {"_id": row["_id"]},
+                                {"$set": {f"sources.{source}": first_forwarded_id}}
+                            )
+
+                        await message.reply(f"✅ Đã hoàn tất scan `{source}` ➔ `{row['target']}` đến ID `{first_forwarded_id or last_forwarded_id}`")
+
+                    except Exception as e:
+                        await message.reply(f"⚠️ Không thể lấy lịch sử từ `{source}` ➔ `{row['target']}`: {e}. Đang xóa source...")
                         forwards.update_one(
                             {"_id": row["_id"]},
-                            {"$set": {f"sources.{source}": first_forwarded_id}}
+                            {"$unset": {f"sources.{source}": ""}}
                         )
-
-                    await message.reply(f"✅ Đã hoàn tất scan `{source}` ➔ `{row['target']}` đến ID `{first_forwarded_id or last_forwarded_id}`")
 
             await message.reply("✅ Đã hoàn tất tất cả các scan.")
 
         finally:
             scanning[message.from_user.id] = False
-
 
 @bot.on_message(filters.command("stop"))
 async def stop_scan(client, message):
@@ -230,7 +236,6 @@ async def stop_scan(client, message):
 
     scanning[message.from_user.id] = False
     await message.reply("🛑 Đã yêu cầu dừng scan.")
-
 
 @bot.on_message(filters.command("adminonly"))
 async def toggle_adminonly(client, message):
@@ -246,11 +251,9 @@ async def toggle_adminonly(client, message):
     status = "✅ Đã bật chế độ chỉ admin." if not current else "❎ Đã tắt chế độ chỉ admin."
     await message.reply(status)
 
-
 @bot.on_message(filters.command("start"))
 async def start_command(client, message):
     await message.reply("🤖 Bot đã chạy thành công! Gõ /help để xem hướng dẫn.")
-
 
 print("🤖 Bot đã khởi động thành công!")
 bot.run()
