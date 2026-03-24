@@ -20,27 +20,32 @@ jobs:
         cache-dependency-glob: "requirements.txt"
     
     - name: Set up Python
-      run: uv python install 3.11
+      run: uv venv --python 3.11 .venv
     
     - name: Install dependencies
       run: |
-        uv pip install --system --break-system-packages -r requirements.txt
-        uv pip install --system --break-system-packages flake8 black isort
+        source .venv/bin/activate
+        uv pip install -r requirements.txt
+        uv pip install flake8 black isort
     
     - name: Check code style with Black
       run: |
+        source .venv/bin/activate
         black --check --diff . || true
     
     - name: Check imports with isort
       run: |
+        source .venv/bin/activate
         isort --check-only --diff . || true
     
     - name: Lint with flake8
       run: |
+        source .venv/bin/activate
         flake8 . --max-line-length=120 --ignore=E501,W503 || true
     
     - name: Check Python syntax
       run: |
+        source .venv/bin/activate
         python -m py_compile bot.py config.py web.py filters.py logger.py sync.py menu.py
         echo "✅ Syntax check passed"
 
