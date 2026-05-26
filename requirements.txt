@@ -1,5 +1,5 @@
 pyrofork
 tgcrypto
-pymongo
+aiosqlite
 flask
 python-dotenv

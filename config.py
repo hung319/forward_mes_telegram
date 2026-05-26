@@ -9,9 +9,8 @@ API_ID = int(os.getenv("API_ID", 123456))
 API_HASH = os.getenv("API_HASH", "your_api_hash")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
 
-# ============ DATABASE ============
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-DATABASE_NAME = os.getenv("DATABASE_NAME", "forward_bot")
+# ============ DATABASE (SQLite) ============
+SQLITE_PATH = os.getenv("SQLITE_PATH", "forward_bot.db")
 
 # ============ ADMIN ============
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "123456789").split(",")))
@@ -19,7 +18,7 @@ ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "123456789").split(",")))
 # ============ LOGGER (Message ID Logging) ============
 LOG_FILE = os.getenv("LOG_FILE", "message_ids.log")
 
-# ============ SYNC (Database Sync) ============
+# ============ SYNC (Log → DB) ============
 SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL", 300))  # seconds (default: 5 minutes)
 
 # ============ REALTIME FORWARD ============
