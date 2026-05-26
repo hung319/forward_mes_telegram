@@ -4,15 +4,8 @@ import aiofiles
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
 from pyrogram.types import Message
-from pymongo import MongoClient
 import config
-
-# Database setup
-mongo_client = MongoClient(config.MONGO_URI)
-db = mongo_client[config.DATABASE_NAME]
-users = db["users"]
-forwards_db = db["forwards"]
-settings = db["settings"]
+import db as db_module
 
 # Initialize bot
 bot = Client(
@@ -31,8 +24,8 @@ def is_admin(user_id):
     return user_id in ADMIN_IDS
 
 
-def get_adminonly():
-    setting = settings.find_one({"_id": "adminonly"})
+async def get_adminonly():
+    setting = await db_module.get_setting("adminonly")
     return setting and setting.get("enabled", False)
 
 
@@ -102,7 +95,7 @@ async def start_command(client, message):
 
 @bot.on_message(filters.command("login"))
 async def login_session(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
     try:
@@ -110,10 +103,8 @@ async def login_session(client, message):
     except IndexError:
         return await message.reply("❗ Dùng: /login [session_string]")
 
-    users.update_one(
-        {"user_id": message.from_user.id},
-        {"$set": {"session_string": session_string}},
-        upsert=True,
+    await db_module.upsert_user(
+        message.from_user.id, session_string=session_string
     )
 
     await message.reply("✅ Đã lưu session thành công.")
@@ -124,7 +115,7 @@ async def login_session(client, message):
 
 @bot.on_message(filters.command("addtarget"))
 async def add_target(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
     try:
@@ -141,7 +132,7 @@ async def add_target(client, message):
         name=name,
         enabled=True,
     )
-    target_config.save()
+    await target_config.save()
 
     await message.reply(f"✅ Đã tạo target: `{target_id}` ({name or 'Default'})")
 
@@ -151,7 +142,7 @@ async def add_target(client, message):
 
 @bot.on_message(filters.command("deletetarget"))
 async def delete_target(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
     try:
@@ -159,7 +150,7 @@ async def delete_target(client, message):
     except (IndexError, ValueError):
         return await message.reply("❗ Dùng: /deletetarget [target_id]")
 
-    TargetConfig.delete(message.from_user.id, target_id)
+    await TargetConfig.delete(message.from_user.id, target_id)
     await message.reply(f"✅ Đã xóa target `{target_id}` và tất cả sources")
 
 
@@ -168,10 +159,10 @@ async def delete_target(client, message):
 
 @bot.on_message(filters.command("targets"))
 async def list_targets(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
-    targets = TargetConfig.get_all(message.from_user.id)
+    targets = await TargetConfig.get_all(message.from_user.id)
 
     if not targets:
         return await message.reply(
@@ -180,7 +171,7 @@ async def list_targets(client, message):
 
     text = "📂 **Danh sách Target:**\n\n"
     for target in targets:
-        sources = target.get_sources()
+        sources = await target.get_sources()
         enabled = sum(1 for s in sources if s.enabled)
         status = "🟢" if target.enabled else "🔴"
         text += f"{status} `{target.target_chat_id}` - {target.name}\n"
@@ -196,11 +187,11 @@ async def list_targets(client, message):
 
 @bot.on_message(filters.command("addsource"))
 async def add_source(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
     # First, check if user has any targets
-    targets = TargetConfig.get_all(message.from_user.id)
+    targets = await TargetConfig.get_all(message.from_user.id)
     if not targets:
         return await message.reply(
             "❗ Cần tạo target trước!\nDùng: /addtarget [target_id]"
@@ -228,7 +219,7 @@ async def add_source(client, message):
         target_chat_id=target_id,
         enabled=True,
     )
-    source_config.save()
+    await source_config.save()
 
     # Create default filter
     filter_config = FilterConfig(
@@ -238,7 +229,7 @@ async def add_source(client, message):
         min_duration=60,
         enabled=True,
     )
-    filter_config.save()
+    await filter_config.save()
 
     await message.reply(f"✅ Đã thêm source: `{source_id}` ➔ `{target_id}`")
 
@@ -248,7 +239,7 @@ async def add_source(client, message):
 
 @bot.on_message(filters.command("removesource"))
 async def remove_source(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
     try:
@@ -256,7 +247,7 @@ async def remove_source(client, message):
     except (IndexError, ValueError):
         return await message.reply("❗ Dùng: /removesource [source_id]")
 
-    SourceConfig.delete(message.from_user.id, source_id)
+    await SourceConfig.delete(message.from_user.id, source_id)
     await message.reply(f"✅ Đã xóa source `{source_id}`")
 
 
@@ -265,17 +256,17 @@ async def remove_source(client, message):
 
 @bot.on_message(filters.command("list"))
 async def list_sources(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
-    targets = TargetConfig.get_all(message.from_user.id)
+    targets = await TargetConfig.get_all(message.from_user.id)
 
     if not targets:
         return await message.reply("📋 Chưa có target nào.")
 
     text = "📋 **Danh sách:**\n\n"
     for target in targets:
-        sources = target.get_sources()
+        sources = await target.get_sources()
         text += f"📂 `{target.target_chat_id}` - {target.name}\n"
         for src in sources:
             status = "🟢" if src.enabled else "🔴"
@@ -290,7 +281,7 @@ async def list_sources(client, message):
 
 @bot.on_message(filters.command("config"))
 async def config_source(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
     try:
@@ -298,14 +289,14 @@ async def config_source(client, message):
     except (IndexError, ValueError):
         return await message.reply("❗ Dùng: /config [source_id]")
 
-    filter_config = FilterConfig.get(message.from_user.id, source_id)
+    filter_config = await FilterConfig.get(message.from_user.id, source_id)
     await message.reply(
         f"⚙️ **Cấu hình cho `{source_id}`:**\n\n"
         f"🟢 Enabled: {filter_config.enabled}\n"
         f"📹 Media: {[m.value for m in filter_config.media_types]}\n"
         f"⏱ Duration: {filter_config.min_duration}s - {filter_config.max_duration or '∞'}s\n"
         f"🔢 DC: {filter_config.dc_ids or 'All'}",
-        reply_markup=build_filter_keyboard(message.from_user.id, source_id),
+        reply_markup=await build_filter_keyboard(message.from_user.id, source_id),
         parse_mode="markdown",
     )
 
@@ -315,7 +306,7 @@ async def config_source(client, message):
 
 @bot.on_message(filters.command("menu"))
 async def menu_command(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
     await message.reply(
@@ -330,7 +321,7 @@ async def menu_command(client, message):
 
 @bot.on_message(filters.command("default"))
 async def default_config(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
     try:
@@ -343,15 +334,10 @@ async def default_config(client, message):
         )
 
     # Update default config for user
-    users.update_one(
-        {"user_id": message.from_user.id},
-        {
-            "$set": {
-                "default_min_duration": min_duration,
-                "default_max_duration": max_duration,
-            }
-        },
-        upsert=True,
+    await db_module.upsert_user(
+        message.from_user.id,
+        default_min_duration=min_duration,
+        default_max_duration=max_duration,
     )
 
     await message.reply(
@@ -364,17 +350,15 @@ async def default_config(client, message):
 
 @bot.on_message(filters.command("stats"))
 async def stats_command(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
-    from sync import forwarded_messages
-    from pymongo import DESCENDING
-
-    total = forwarded_messages.count_documents({"user_id": message.from_user.id})
+    total = await db_module.count_forwarded_messages(message.from_user.id)
 
     # Count by media type
     media_stats = {}
-    for doc in forwarded_messages.find({"user_id": message.from_user.id}):
+    all_msgs = await db_module.get_all_forwarded_messages(message.from_user.id)
+    for doc in all_msgs:
         mt = doc.get("media_type", "unknown")
         media_stats[mt] = media_stats.get(mt, 0) + 1
 
@@ -392,7 +376,7 @@ async def stats_command(client, message):
 
 @bot.on_message(filters.command("realtime"))
 async def toggle_realtime(client, message):
-    if get_adminonly() and not is_admin(message.from_user.id):
+    if await get_adminonly() and not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
     try:
@@ -401,7 +385,7 @@ async def toggle_realtime(client, message):
         return await message.reply("❗ Dùng: /realtime on|off")
 
     user_id = message.from_user.id
-    user_data = users.find_one({"user_id": user_id})
+    user_data = await db_module.get_user(user_id)
 
     if not user_data or not user_data.get("session_string"):
         return await message.reply("❗ Vui lòng /login [session_string] trước.")
@@ -432,7 +416,7 @@ async def forward_message(
         return False
 
     # Get filter config
-    filter_config = FilterConfig.get(user_id, source_id)
+    filter_config = await FilterConfig.get(user_id, source_id)
 
     # Check if message matches filter
     if not filter_config.matches(message):
@@ -479,7 +463,7 @@ async def realtime_message_handler(
 
 async def start_realtime_forward(user_id: int):
     """Background task for realtime message forwarding"""
-    user_data = users.find_one({"user_id": user_id})
+    user_data = await db_module.get_user(user_id)
     session_string = user_data["session_string"]
 
     from pyrogram import Client as UserClient
@@ -498,7 +482,7 @@ async def start_realtime_forward(user_id: int):
         print(f"📡 Realtime forwarding started for user {user_id}")
 
         # Get sources
-        sources = SourceConfig.get_all(user_id)
+        sources = await SourceConfig.get_all(user_id)
         source_targets = {
             src.source_chat_id: src.target_chat_id for src in sources if src.enabled
         }
@@ -531,7 +515,7 @@ async def start_realtime_forward(user_id: int):
         print(f"📡 Realtime forwarding started for user {user_id}")
 
         async for dialog in user_client.get_dialogs():
-            source_config = SourceConfig.get(user_id, dialog.chat.id)
+            source_config = await SourceConfig.get(user_id, dialog.chat.id)
             if source_config and source_config.enabled:
                 # Set up message handler for this chat
                 pass
@@ -564,9 +548,9 @@ async def toggle_adminonly(client, message):
     if not is_admin(message.from_user.id):
         return await message.reply("❌ Bạn không có quyền.")
 
-    current = get_adminonly()
-    settings.update_one(
-        {"_id": "adminonly"}, {"$set": {"enabled": not current}}, upsert=True
+    current = await get_adminonly()
+    await db_module.upsert_setting(
+        "adminonly", enabled=0 if current else 1
     )
     status = (
         "✅ Đã bật chế độ chỉ admin." if not current else "❎ Đã tắt chế độ chỉ admin."

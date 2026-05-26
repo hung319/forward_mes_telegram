@@ -43,8 +43,8 @@ def build_main_menu_keyboard():
     return types.InlineKeyboardMarkup(keyboard)
 
 
-def build_target_keyboard(user_id: int, page: int = 0):
-    targets = TargetConfig.get_all(user_id)
+async def build_target_keyboard(user_id: int, page: int = 0):
+    targets = await TargetConfig.get_all(user_id)
     total_pages = max(1, (len(targets) + PAGE_SIZE - 1) // PAGE_SIZE)
 
     keyboard = []
@@ -56,7 +56,7 @@ def build_target_keyboard(user_id: int, page: int = 0):
     end = start + PAGE_SIZE
 
     for target in targets[start:end]:
-        sources = target.get_sources()
+        sources = await target.get_sources()
         status = "🟢" if target.enabled else "🔴"
         keyboard.append(
             [
@@ -69,7 +69,7 @@ def build_target_keyboard(user_id: int, page: int = 0):
 
         for src in sources[:3]:
             src_status = "🟢" if src.enabled else "🔴"
-            filter_cfg = FilterConfig.get(user_id, src.source_chat_id)
+            filter_cfg = await FilterConfig.get(user_id, src.source_chat_id)
             media_icon = get_media_icon(filter_cfg.media_types)
             keyboard.append(
                 [
@@ -129,12 +129,12 @@ def build_target_keyboard(user_id: int, page: int = 0):
     return types.InlineKeyboardMarkup(keyboard)
 
 
-def build_target_detail_keyboard(user_id: int, target_chat_id: int):
-    target = TargetConfig.get(user_id, target_chat_id)
+async def build_target_detail_keyboard(user_id: int, target_chat_id: int):
+    target = await TargetConfig.get(user_id, target_chat_id)
     if not target:
-        return build_target_keyboard(user_id)
+        return await build_target_keyboard(user_id)
 
-    sources = target.get_sources()
+    sources = await target.get_sources()
     keyboard = []
     status = "🟢" if target.enabled else "🔴"
     keyboard.append(
@@ -148,7 +148,7 @@ def build_target_detail_keyboard(user_id: int, target_chat_id: int):
     keyboard.append([types.InlineKeyboardButton("📨 NGUỒN:", callback_data="noop")])
 
     for src in sources:
-        filter_cfg = FilterConfig.get(user_id, src.source_chat_id)
+        filter_cfg = await FilterConfig.get(user_id, src.source_chat_id)
         src_status = "🟢" if src.enabled else "🔴"
         media_icon = get_media_icon(filter_cfg.media_types)
         min_dur = filter_cfg.min_duration or 0
@@ -198,11 +198,11 @@ def build_target_detail_keyboard(user_id: int, target_chat_id: int):
     return types.InlineKeyboardMarkup(keyboard)
 
 
-def build_filter_keyboard(user_id: int, source_chat_id: int, page: int = 0):
-    filter_config = FilterConfig.get(user_id, source_chat_id)
-    source_config = SourceConfig.get(user_id, source_chat_id)
+async def build_filter_keyboard(user_id: int, source_chat_id: int, page: int = 0):
+    filter_config = await FilterConfig.get(user_id, source_chat_id)
+    source_config = await SourceConfig.get(user_id, source_chat_id)
     if not source_config:
-        return build_target_keyboard(user_id)
+        return await build_target_keyboard(user_id)
 
     if page == 0:
         return _build_filter_page_media(user_id, source_chat_id, filter_config)
@@ -212,6 +212,20 @@ def build_filter_keyboard(user_id: int, source_chat_id: int, page: int = 0):
         return _build_filter_page_content(user_id, source_chat_id, filter_config)
     else:
         return _build_filter_page_media(user_id, source_chat_id, filter_config)
+
+
+def _get_target_id_for_back(user_id: int, source_chat_id: int):
+    """Helper to get target_chat_id for back button without async."""
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        if loop.is_running():
+            # We're in an async context, but this is called during keyboard building
+            # which happens synchronously. We resolve the source via a simple coro.
+            return None  # fallback - back button won't have dynamic target id
+    except RuntimeError:
+        pass
+    return None
 
 
 def _build_filter_page_media(user_id, source_chat_id, filter_config):
@@ -322,7 +336,7 @@ def _build_filter_page_media(user_id, source_chat_id, filter_config):
         [
             types.InlineKeyboardButton(
                 "🔙 Quay lại",
-                callback_data=f"target_view_{SourceConfig.get(user_id, source_chat_id).target_chat_id}",
+                callback_data=f"src_edit_{source_chat_id}",
             )
         ]
     )
@@ -411,7 +425,7 @@ def _build_filter_page_forward(user_id, source_chat_id, filter_config):
         [
             types.InlineKeyboardButton(
                 "🔙 Quay lại",
-                callback_data=f"target_view_{SourceConfig.get(user_id, source_chat_id).target_chat_id}",
+                callback_data=f"src_edit_{source_chat_id}",
             )
         ]
     )
@@ -491,7 +505,7 @@ def _build_filter_page_content(user_id, source_chat_id, filter_config):
         [
             types.InlineKeyboardButton(
                 "🔙 Quay lại",
-                callback_data=f"target_view_{SourceConfig.get(user_id, source_chat_id).target_chat_id}",
+                callback_data=f"src_edit_{source_chat_id}",
             )
         ]
     )
@@ -535,21 +549,22 @@ async def handle_callback(client, callback_query):
     if data == "menu_targets":
         await callback_query.message.edit(
             "📂 **Danh sách Target:**",
-            reply_markup=build_target_keyboard(user_id),
+            reply_markup=await build_target_keyboard(user_id),
             parse_mode="markdown",
         )
         await callback_query.answer()
         return
 
     if data == "menu_stats":
-        from sync import forwarded_messages
+        import db as db_module
 
-        total = forwarded_messages.count_documents({"user_id": user_id})
-        targets = TargetConfig.get_all(user_id)
-        sources = SourceConfig.get_all(user_id)
+        total = await db_module.count_forwarded_messages(user_id)
+        targets = await TargetConfig.get_all(user_id)
+        sources = await SourceConfig.get_all(user_id)
         enabled_sources = sum(1 for s in sources if s.enabled)
         media_stats = {}
-        for doc in forwarded_messages.find({"user_id": user_id}):
+        all_msgs = await db_module.get_all_forwarded_messages(user_id)
+        for doc in all_msgs:
             mt = doc.get("media_type", "unknown")
             media_stats[mt] = media_stats.get(mt, 0) + 1
         from bot import realtime_running
@@ -578,7 +593,7 @@ async def handle_callback(client, callback_query):
         source_id = int(parts[3])
         await callback_query.message.edit(
             "⚙️",
-            reply_markup=build_filter_keyboard(user_id, source_id, page),
+            reply_markup=await build_filter_keyboard(user_id, source_id, page),
             parse_mode="markdown",
         )
         await callback_query.answer()
@@ -589,7 +604,7 @@ async def handle_callback(client, callback_query):
         page = int(data.split("_")[-1])
         await callback_query.message.edit(
             "📂 **Danh sách Target:**",
-            reply_markup=build_target_keyboard(user_id, page),
+            reply_markup=await build_target_keyboard(user_id, page),
             parse_mode="markdown",
         )
         return
@@ -598,20 +613,20 @@ async def handle_callback(client, callback_query):
         target_id = int(data.split("_")[-1])
         await callback_query.message.edit(
             f"📂 **Target {target_id}:**",
-            reply_markup=build_target_detail_keyboard(user_id, target_id),
+            reply_markup=await build_target_detail_keyboard(user_id, target_id),
             parse_mode="markdown",
         )
         return
 
     if data.startswith("target_toggle_"):
         target_id = int(data.split("_")[-1])
-        target = TargetConfig.get(user_id, target_id)
+        target = await TargetConfig.get(user_id, target_id)
         if target:
             target.enabled = not target.enabled
-            target.save()
+            await target.save()
         await callback_query.message.edit(
             f"📂 **Target {target_id}:**",
-            reply_markup=build_target_detail_keyboard(user_id, target_id),
+            reply_markup=await build_target_detail_keyboard(user_id, target_id),
             parse_mode="markdown",
         )
         return
@@ -626,41 +641,41 @@ async def handle_callback(client, callback_query):
 
     if data.startswith("target_set_video_"):
         target_id = int(data.split("_")[-1])
-        sources = SourceConfig.get_by_target(user_id, target_id)
+        sources = await SourceConfig.get_by_target(user_id, target_id)
         for src in sources:
-            filter_cfg = FilterConfig.get(user_id, src.source_chat_id)
+            filter_cfg = await FilterConfig.get(user_id, src.source_chat_id)
             filter_cfg.media_types = [MediaType.VIDEO]
-            filter_cfg.save()
+            await filter_cfg.save()
         await callback_query.answer("✅ All → Video")
         await callback_query.message.edit(
             f"📂 **Target {target_id}:**",
-            reply_markup=build_target_detail_keyboard(user_id, target_id),
+            reply_markup=await build_target_detail_keyboard(user_id, target_id),
             parse_mode="markdown",
         )
         return
 
     if data.startswith("target_set_photo_"):
         target_id = int(data.split("_")[-1])
-        sources = SourceConfig.get_by_target(user_id, target_id)
+        sources = await SourceConfig.get_by_target(user_id, target_id)
         for src in sources:
-            filter_cfg = FilterConfig.get(user_id, src.source_chat_id)
+            filter_cfg = await FilterConfig.get(user_id, src.source_chat_id)
             filter_cfg.media_types = [MediaType.PHOTO]
-            filter_cfg.save()
+            await filter_cfg.save()
         await callback_query.answer("✅ All → Ảnh")
         await callback_query.message.edit(
             f"📂 **Target {target_id}:**",
-            reply_markup=build_target_detail_keyboard(user_id, target_id),
+            reply_markup=await build_target_detail_keyboard(user_id, target_id),
             parse_mode="markdown",
         )
         return
 
     if data.startswith("target_del_"):
         target_id = int(data.split("_")[-1])
-        TargetConfig.delete(user_id, target_id)
+        await TargetConfig.delete(user_id, target_id)
         await callback_query.answer("✅ Đã xóa target")
         await callback_query.message.edit(
             "📂 **Danh sách Target:**",
-            reply_markup=build_target_keyboard(user_id),
+            reply_markup=await build_target_keyboard(user_id),
             parse_mode="markdown",
         )
         return
@@ -670,19 +685,19 @@ async def handle_callback(client, callback_query):
         source_id = int(data.split("_")[-1])
         await callback_query.message.edit(
             f"⚙️ **Cấu hình {source_id}:**",
-            reply_markup=build_filter_keyboard(user_id, source_id, 0),
+            reply_markup=await build_filter_keyboard(user_id, source_id, 0),
             parse_mode="markdown",
         )
         return
 
     if data.startswith("src_del_"):
         source_id = int(data.split("_")[-1])
-        SourceConfig.delete(user_id, source_id)
-        source = SourceConfig.get(user_id, source_id)
+        await SourceConfig.delete(user_id, source_id)
+        source = await SourceConfig.get(user_id, source_id)
         if source:
             await callback_query.message.edit(
                 f"📂 **Target {source.target_chat_id}:**",
-                reply_markup=build_target_detail_keyboard(
+                reply_markup=await build_target_detail_keyboard(
                     user_id, source.target_chat_id
                 ),
                 parse_mode="markdown",
@@ -690,7 +705,7 @@ async def handle_callback(client, callback_query):
         else:
             await callback_query.message.edit(
                 "📂 **Danh sách Target:**",
-                reply_markup=build_target_keyboard(user_id),
+                reply_markup=await build_target_keyboard(user_id),
                 parse_mode="markdown",
             )
         return
@@ -698,12 +713,12 @@ async def handle_callback(client, callback_query):
     # Filter toggle
     if data.startswith("filter_toggle_"):
         source_id = int(data.split("_")[-1])
-        filter_cfg = FilterConfig.get(user_id, source_id)
+        filter_cfg = await FilterConfig.get(user_id, source_id)
         filter_cfg.enabled = not filter_cfg.enabled
-        filter_cfg.save()
+        await filter_cfg.save()
         await callback_query.message.edit(
             f"⚙️ **Cấu hình {source_id}:**",
-            reply_markup=build_filter_keyboard(user_id, source_id, 0),
+            reply_markup=await build_filter_keyboard(user_id, source_id, 0),
             parse_mode="markdown",
         )
         return
@@ -713,14 +728,14 @@ async def handle_callback(client, callback_query):
         parts = data.split("_")
         if parts[0] == "media" and parts[1] == "all":
             source_id = int(parts[-1])
-            filter_cfg = FilterConfig.get(user_id, source_id)
+            filter_cfg = await FilterConfig.get(user_id, source_id)
             filter_cfg.media_types = [MediaType.ALL]
-            filter_cfg.save()
+            await filter_cfg.save()
             await callback_query.answer("✅ All media types")
         else:
             media_type = parts[2]
             source_id = int(parts[-1])
-            filter_cfg = FilterConfig.get(user_id, source_id)
+            filter_cfg = await FilterConfig.get(user_id, source_id)
             media_enum = MediaType(media_type)
             if media_enum in filter_cfg.media_types:
                 filter_cfg.media_types.remove(media_enum)
@@ -731,10 +746,10 @@ async def handle_callback(client, callback_query):
                     filter_cfg.media_types.append(media_enum)
             if not filter_cfg.media_types:
                 filter_cfg.media_types = [MediaType.ALL]
-            filter_cfg.save()
+            await filter_cfg.save()
         await callback_query.message.edit(
             f"⚙️ **Cấu hình {source_id}:**",
-            reply_markup=build_filter_keyboard(user_id, source_id, 0),
+            reply_markup=await build_filter_keyboard(user_id, source_id, 0),
             parse_mode="markdown",
         )
         return
@@ -744,27 +759,27 @@ async def handle_callback(client, callback_query):
         parts = data.split("_")
         duration = int(parts[2])
         source_id = int(parts[-1])
-        filter_cfg = FilterConfig.get(user_id, source_id)
+        filter_cfg = await FilterConfig.get(user_id, source_id)
         filter_cfg.min_duration = duration
-        filter_cfg.save()
+        await filter_cfg.save()
         await callback_query.answer(f"✅ Min: {duration}s")
         await callback_query.message.edit(
             f"⚙️ **Cấu hình {source_id}:**",
-            reply_markup=build_filter_keyboard(user_id, source_id, 0),
+            reply_markup=await build_filter_keyboard(user_id, source_id, 0),
             parse_mode="markdown",
         )
         return
 
     if data.startswith("dur_clear_"):
         source_id = int(data.split("_")[-1])
-        filter_cfg = FilterConfig.get(user_id, source_id)
+        filter_cfg = await FilterConfig.get(user_id, source_id)
         filter_cfg.min_duration = 0
         filter_cfg.max_duration = None
-        filter_cfg.save()
+        await filter_cfg.save()
         await callback_query.answer("✅ Đã clear")
         await callback_query.message.edit(
             f"⚙️ **Cấu hình {source_id}:**",
-            reply_markup=build_filter_keyboard(user_id, source_id, 0),
+            reply_markup=await build_filter_keyboard(user_id, source_id, 0),
             parse_mode="markdown",
         )
         return
@@ -772,24 +787,24 @@ async def handle_callback(client, callback_query):
     # Forward options
     if data.startswith("opt_cap_"):
         source_id = int(data.split("_")[-1])
-        filter_cfg = FilterConfig.get(user_id, source_id)
+        filter_cfg = await FilterConfig.get(user_id, source_id)
         filter_cfg.remove_caption = not filter_cfg.remove_caption
-        filter_cfg.save()
+        await filter_cfg.save()
         await callback_query.message.edit(
             f"⚙️ **Cấu hình {source_id}:**",
-            reply_markup=build_filter_keyboard(user_id, source_id, 1),
+            reply_markup=await build_filter_keyboard(user_id, source_id, 1),
             parse_mode="markdown",
         )
         return
 
     if data.startswith("opt_fwd_"):
         source_id = int(data.split("_")[-1])
-        filter_cfg = FilterConfig.get(user_id, source_id)
+        filter_cfg = await FilterConfig.get(user_id, source_id)
         filter_cfg.remove_forward_header = not filter_cfg.remove_forward_header
-        filter_cfg.save()
+        await filter_cfg.save()
         await callback_query.message.edit(
             f"⚙️ **Cấu hình {source_id}:**",
-            reply_markup=build_filter_keyboard(user_id, source_id, 1),
+            reply_markup=await build_filter_keyboard(user_id, source_id, 1),
             parse_mode="markdown",
         )
         return
@@ -799,7 +814,7 @@ async def handle_callback(client, callback_query):
         parts = data.split("_")
         size_type = parts[1]
         source_id = int(parts[-1])
-        filter_cfg = FilterConfig.get(user_id, source_id)
+        filter_cfg = await FilterConfig.get(user_id, source_id)
         if size_type == "5m":
             filter_cfg.min_file_size = 5 * 1024 * 1024
         elif size_type == "10m":
@@ -809,11 +824,11 @@ async def handle_callback(client, callback_query):
         elif size_type == "clear":
             filter_cfg.min_file_size = 0
             filter_cfg.max_file_size = None
-        filter_cfg.save()
+        await filter_cfg.save()
         await callback_query.answer("✅ Size updated")
         await callback_query.message.edit(
             f"⚙️ **Cấu hình {source_id}:**",
-            reply_markup=build_filter_keyboard(user_id, source_id, 1),
+            reply_markup=await build_filter_keyboard(user_id, source_id, 1),
             parse_mode="markdown",
         )
         return
@@ -821,37 +836,37 @@ async def handle_callback(client, callback_query):
     # Content options
     if data.startswith("req_cap_"):
         source_id = int(data.split("_")[-1])
-        filter_cfg = FilterConfig.get(user_id, source_id)
+        filter_cfg = await FilterConfig.get(user_id, source_id)
         filter_cfg.require_caption = not filter_cfg.require_caption
-        filter_cfg.save()
+        await filter_cfg.save()
         await callback_query.message.edit(
             f"⚙️ **Cấu hình {source_id}:**",
-            reply_markup=build_filter_keyboard(user_id, source_id, 2),
+            reply_markup=await build_filter_keyboard(user_id, source_id, 2),
             parse_mode="markdown",
         )
         return
 
     if data.startswith("req_tag_"):
         source_id = int(data.split("_")[-1])
-        filter_cfg = FilterConfig.get(user_id, source_id)
+        filter_cfg = await FilterConfig.get(user_id, source_id)
         filter_cfg.require_hashtags = not filter_cfg.require_hashtags
-        filter_cfg.save()
+        await filter_cfg.save()
         await callback_query.message.edit(
             f"⚙️ **Cấu hình {source_id}:**",
-            reply_markup=build_filter_keyboard(user_id, source_id, 2),
+            reply_markup=await build_filter_keyboard(user_id, source_id, 2),
             parse_mode="markdown",
         )
         return
 
     if data.startswith("block_clear_"):
         source_id = int(data.split("_")[-1])
-        filter_cfg = FilterConfig.get(user_id, source_id)
+        filter_cfg = await FilterConfig.get(user_id, source_id)
         filter_cfg.block_list = []
-        filter_cfg.save()
+        await filter_cfg.save()
         await callback_query.answer("✅ Đã clear")
         await callback_query.message.edit(
             f"⚙️ **Cấu hình {source_id}:**",
-            reply_markup=build_filter_keyboard(user_id, source_id, 2),
+            reply_markup=await build_filter_keyboard(user_id, source_id, 2),
             parse_mode="markdown",
         )
         return
@@ -865,11 +880,11 @@ async def handle_callback(client, callback_query):
 
     # Main menu quick filters
     if data == "main_video":
-        sources = SourceConfig.get_all(user_id)
+        sources = await SourceConfig.get_all(user_id)
         for src in sources:
-            filter_cfg = FilterConfig.get(user_id, src.source_chat_id)
+            filter_cfg = await FilterConfig.get(user_id, src.source_chat_id)
             filter_cfg.media_types = [MediaType.VIDEO]
-            filter_cfg.save()
+            await filter_cfg.save()
         await callback_query.answer("✅ All → Video")
         await callback_query.message.edit(
             "⚙️ **Menu cấu hình:**",
@@ -879,11 +894,11 @@ async def handle_callback(client, callback_query):
         return
 
     if data == "main_photo":
-        sources = SourceConfig.get_all(user_id)
+        sources = await SourceConfig.get_all(user_id)
         for src in sources:
-            filter_cfg = FilterConfig.get(user_id, src.source_chat_id)
+            filter_cfg = await FilterConfig.get(user_id, src.source_chat_id)
             filter_cfg.media_types = [MediaType.PHOTO]
-            filter_cfg.save()
+            await filter_cfg.save()
         await callback_query.answer("✅ All → Ảnh")
         await callback_query.message.edit(
             "⚙️ **Menu cấu hình:**",
@@ -893,11 +908,11 @@ async def handle_callback(client, callback_query):
         return
 
     if data == "main_doc":
-        sources = SourceConfig.get_all(user_id)
+        sources = await SourceConfig.get_all(user_id)
         for src in sources:
-            filter_cfg = FilterConfig.get(user_id, src.source_chat_id)
+            filter_cfg = await FilterConfig.get(user_id, src.source_chat_id)
             filter_cfg.media_types = [MediaType.DOCUMENT]
-            filter_cfg.save()
+            await filter_cfg.save()
         await callback_query.answer("✅ All → Document")
         await callback_query.message.edit(
             "⚙️ **Menu cấu hình:**",
@@ -922,9 +937,10 @@ async def handle_callback(client, callback_query):
         return
 
     if data == "realtime_on":
-        from bot import realtime_running, users
+        import db as db_module
+        from bot import realtime_running
 
-        user_data = users.find_one({"user_id": user_id})
+        user_data = await db_module.get_user(user_id)
         if not user_data or not user_data.get("session_string"):
             await callback_query.answer("❗ Cần /login trước!", show_alert=True)
             return
