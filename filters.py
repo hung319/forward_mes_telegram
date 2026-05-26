@@ -1,12 +1,6 @@
-from pymongo import MongoClient
-import config
+import json
 from enum import Enum
-
-mongo_client = MongoClient(config.MONGO_URI)
-db = mongo_client[config.DATABASE_NAME]
-filters_collection = db["filters"]
-targets_collection = db["targets"]
-sources_collection = db["sources"]
+import db as db_module
 
 
 class MediaType(Enum):
@@ -78,17 +72,13 @@ class FilterConfig:
             "max_duration": self.max_duration,
             "dc_ids": self.dc_ids,
             "enabled": self.enabled,
-            # Forward options
             "remove_caption": self.remove_caption,
             "remove_forward_header": self.remove_forward_header,
-            # Size filters
             "min_file_size": self.min_file_size,
             "max_file_size": self.max_file_size,
-            # Content filters
             "require_caption": self.require_caption,
             "require_hashtags": self.require_hashtags,
             "block_list": self.block_list,
-            # Advanced
             "only_from_users": self.only_from_users,
             "block_from_users": self.block_from_users,
         }
@@ -103,41 +93,69 @@ class FilterConfig:
             max_duration=data.get("max_duration"),
             dc_ids=data.get("dc_ids", []),
             enabled=data.get("enabled", True),
-            # Forward options
             remove_caption=data.get("remove_caption", False),
             remove_forward_header=data.get("remove_forward_header", False),
-            # Size filters
             min_file_size=data.get("min_file_size", 0),
             max_file_size=data.get("max_file_size"),
-            # Content filters
             require_caption=data.get("require_caption", False),
             require_hashtags=data.get("require_hashtags", False),
             block_list=data.get("block_list", []),
-            # Advanced
             only_from_users=data.get("only_from_users", []),
             block_from_users=data.get("block_from_users", []),
         )
 
-    def save(self):
-        filters_collection.update_one(
-            {"user_id": self.user_id, "source_chat_id": self.source_chat_id},
-            {"$set": self.to_dict()},
-            upsert=True,
+    async def save(self):
+        d = self.to_dict()
+        # Convert list fields to JSON strings for SQLite
+        db = await db_module.get_db()
+        await db.execute(
+            """INSERT OR REPLACE INTO filters
+               (user_id, source_chat_id, media_types, min_duration, max_duration,
+                dc_ids, enabled, remove_caption, remove_forward_header,
+                min_file_size, max_file_size, require_caption, require_hashtags,
+                block_list, only_from_users, block_from_users)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                d["user_id"],
+                d["source_chat_id"],
+                json.dumps(d["media_types"]),
+                d["min_duration"],
+                d["max_duration"],
+                json.dumps(d["dc_ids"]),
+                1 if d["enabled"] else 0,
+                1 if d["remove_caption"] else 0,
+                1 if d["remove_forward_header"] else 0,
+                d["min_file_size"],
+                d["max_file_size"],
+                1 if d["require_caption"] else 0,
+                1 if d["require_hashtags"] else 0,
+                json.dumps(d["block_list"]),
+                json.dumps(d["only_from_users"]),
+                json.dumps(d["block_from_users"]),
+            ),
         )
+        await db.commit()
 
     @staticmethod
-    def get(user_id: int, source_chat_id: int) -> "FilterConfig":
-        data = filters_collection.find_one(
-            {"user_id": user_id, "source_chat_id": source_chat_id}
+    async def get(user_id: int, source_chat_id: int) -> "FilterConfig":
+        db = await db_module.get_db()
+        cursor = await db.execute(
+            "SELECT * FROM filters WHERE user_id = ? AND source_chat_id = ?",
+            (user_id, source_chat_id),
         )
-        if data:
-            return FilterConfig.from_dict(data)
+        row = await cursor.fetchone()
+        if row:
+            return FilterConfig.from_dict(_row_to_filter_dict(row))
         return FilterConfig(user_id=user_id, source_chat_id=source_chat_id)
 
     @staticmethod
-    def get_all(user_id: int) -> list:
-        cursor = filters_collection.find({"user_id": user_id})
-        return [FilterConfig.from_dict(doc) for doc in cursor]
+    async def get_all(user_id: int) -> list:
+        db = await db_module.get_db()
+        cursor = await db.execute(
+            "SELECT * FROM filters WHERE user_id = ?", (user_id,)
+        )
+        rows = await cursor.fetchall()
+        return [FilterConfig.from_dict(_row_to_filter_dict(r)) for r in rows]
 
     def matches(self, message) -> bool:
         if not self.enabled:
@@ -259,41 +277,57 @@ class TargetConfig:
             enabled=data.get("enabled", True),
         )
 
-    def save(self):
-        targets_collection.update_one(
-            {"user_id": self.user_id, "target_chat_id": self.target_chat_id},
-            {"$set": self.to_dict()},
-            upsert=True,
+    async def save(self):
+        db = await db_module.get_db()
+        await db.execute(
+            """INSERT OR REPLACE INTO targets (user_id, target_chat_id, name, enabled)
+               VALUES (?, ?, ?, ?)""",
+            (self.user_id, self.target_chat_id, self.name, 1 if self.enabled else 0),
         )
+        await db.commit()
 
     @staticmethod
-    def get(user_id: int, target_chat_id: int):
-        data = targets_collection.find_one(
-            {"user_id": user_id, "target_chat_id": target_chat_id}
+    async def get(user_id: int, target_chat_id: int):
+        db = await db_module.get_db()
+        cursor = await db.execute(
+            "SELECT * FROM targets WHERE user_id = ? AND target_chat_id = ?",
+            (user_id, target_chat_id),
         )
-        if data:
-            return TargetConfig.from_dict(data)
+        row = await cursor.fetchone()
+        if row:
+            return TargetConfig.from_dict(dict(row))
         return None
 
     @staticmethod
-    def get_all(user_id: int) -> list:
-        cursor = targets_collection.find({"user_id": user_id})
-        return [TargetConfig.from_dict(doc) for doc in cursor]
+    async def get_all(user_id: int) -> list:
+        db = await db_module.get_db()
+        cursor = await db.execute(
+            "SELECT * FROM targets WHERE user_id = ?", (user_id,)
+        )
+        rows = await cursor.fetchall()
+        return [TargetConfig.from_dict(dict(r)) for r in rows]
 
     @staticmethod
-    def delete(user_id: int, target_chat_id: int):
-        sources_collection.delete_many(
-            {"user_id": user_id, "target_chat_id": target_chat_id}
+    async def delete(user_id: int, target_chat_id: int):
+        db = await db_module.get_db()
+        await db.execute(
+            "DELETE FROM sources WHERE user_id = ? AND target_chat_id = ?",
+            (user_id, target_chat_id),
         )
-        targets_collection.delete_one(
-            {"user_id": user_id, "target_chat_id": target_chat_id}
+        await db.execute(
+            "DELETE FROM targets WHERE user_id = ? AND target_chat_id = ?",
+            (user_id, target_chat_id),
         )
+        await db.commit()
 
-    def get_sources(self) -> list:
-        cursor = sources_collection.find(
-            {"user_id": self.user_id, "target_chat_id": self.target_chat_id}
+    async def get_sources(self) -> list:
+        db = await db_module.get_db()
+        cursor = await db.execute(
+            "SELECT * FROM sources WHERE user_id = ? AND target_chat_id = ?",
+            (self.user_id, self.target_chat_id),
         )
-        return [SourceConfig.from_dict(doc) for doc in cursor]
+        rows = await cursor.fetchall()
+        return [SourceConfig.from_dict(dict(r)) for r in rows]
 
 
 class SourceConfig:
@@ -328,45 +362,78 @@ class SourceConfig:
             enabled=data.get("enabled", True),
         )
 
-    def save(self):
-        sources_collection.update_one(
-            {"user_id": self.user_id, "source_chat_id": self.source_chat_id},
-            {"$set": self.to_dict()},
-            upsert=True,
+    async def save(self):
+        db = await db_module.get_db()
+        await db.execute(
+            """INSERT OR REPLACE INTO sources (user_id, source_chat_id, target_chat_id, enabled)
+               VALUES (?, ?, ?, ?)""",
+            (self.user_id, self.source_chat_id, self.target_chat_id, 1 if self.enabled else 0),
         )
+        await db.commit()
 
     @staticmethod
-    def get(user_id: int, source_chat_id: int) -> "SourceConfig":
-        data = sources_collection.find_one(
-            {"user_id": user_id, "source_chat_id": source_chat_id}
+    async def get(user_id: int, source_chat_id: int) -> "SourceConfig":
+        db = await db_module.get_db()
+        cursor = await db.execute(
+            "SELECT * FROM sources WHERE user_id = ? AND source_chat_id = ?",
+            (user_id, source_chat_id),
         )
-        if data:
-            return SourceConfig.from_dict(data)
+        row = await cursor.fetchone()
+        if row:
+            return SourceConfig.from_dict(dict(row))
         return None
 
     @staticmethod
-    def get_all(user_id: int) -> list:
-        cursor = sources_collection.find({"user_id": user_id})
-        return [SourceConfig.from_dict(doc) for doc in cursor]
+    async def get_all(user_id: int) -> list:
+        db = await db_module.get_db()
+        cursor = await db.execute(
+            "SELECT * FROM sources WHERE user_id = ?", (user_id,)
+        )
+        rows = await cursor.fetchall()
+        return [SourceConfig.from_dict(dict(r)) for r in rows]
 
     @staticmethod
-    def get_by_target(user_id: int, target_chat_id: int) -> list:
-        cursor = sources_collection.find(
-            {"user_id": user_id, "target_chat_id": target_chat_id}
+    async def get_by_target(user_id: int, target_chat_id: int) -> list:
+        db = await db_module.get_db()
+        cursor = await db.execute(
+            "SELECT * FROM sources WHERE user_id = ? AND target_chat_id = ?",
+            (user_id, target_chat_id),
         )
-        return [SourceConfig.from_dict(doc) for doc in cursor]
+        rows = await cursor.fetchall()
+        return [SourceConfig.from_dict(dict(r)) for r in rows]
 
     @staticmethod
-    def delete(user_id: int, source_chat_id: int):
-        sources_collection.delete_one(
-            {"user_id": user_id, "source_chat_id": source_chat_id}
+    async def delete(user_id: int, source_chat_id: int):
+        db = await db_module.get_db()
+        await db.execute(
+            "DELETE FROM sources WHERE user_id = ? AND source_chat_id = ?",
+            (user_id, source_chat_id),
         )
-        filters_collection.delete_one(
-            {"user_id": user_id, "source_chat_id": source_chat_id}
+        await db.execute(
+            "DELETE FROM filters WHERE user_id = ? AND source_chat_id = ?",
+            (user_id, source_chat_id),
         )
+        await db.commit()
 
 
-# Helper functions
+# ─── Helpers ─────────────────────────────────────────────────────
+
+
+def _row_to_filter_dict(row) -> dict:
+    """Convert a sqlite Row to a dict with JSON fields decoded."""
+    d = dict(row)
+    # Decode JSON string fields
+    for field in ("media_types", "dc_ids", "block_list", "only_from_users", "block_from_users"):
+        if isinstance(d.get(field), str):
+            d[field] = json.loads(d[field])
+    # Convert integer booleans back
+    for field in ("enabled", "remove_caption", "remove_forward_header",
+                  "require_caption", "require_hashtags"):
+        if field in d:
+            d[field] = bool(d[field])
+    return d
+
+
 def format_file_size(bytes_size: int) -> str:
     """Format bytes to human readable size"""
     if bytes_size < 1024:
